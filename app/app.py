@@ -1,41 +1,28 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, Depends, HTTPException
 import redis.asyncio as redis
 import time
 import math
 
-r = redis.Redis(host="localhost", port=6379, db=0)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    r = redis.Redis(host="localhost", port=6379, db=0)
+    app.state.r = r
 
-lua_script = """
-local bucket_tokens_key = KEYS[1]
-local bucket_timestamp_key = KEYS[2]
+    with open("rate_limit.lua", "r") as f:
+           script_content = f.read()
 
-local capacity = tonumber(ARGV[1])
-local refill_rate = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-local requested_tokens = tonumber(ARGV[4])
+    app.state.rate_limit = r.register_script(script_content)
+    await r.ping()
+    print('redis connected')
 
-local current_tokens = tonumber(redis.call("GET", bucket_tokens_key)) or capacity
-local last_time = tonumber(redis.call("GET", bucket_timestamp_key)) or now
+    try:
+        yield
+    finally:
+        await r.aclose()
+        print('redis disconnected')
 
-local time_passed = math.max(0, now - last_time)
-local tokens_to_add = time_passed * refill_rate
-
-current_tokens = math.min(capacity, current_tokens + tokens_to_add)
-
-if current_tokens >= requested_tokens then
-    current_tokens = current_tokens - requested_tokens
-    redis.call("SET", bucket_tokens_key, current_tokens)
-    redis.call("SET", bucket_timestamp_key, now)
-    return {1, current_tokens}
-else
-    redis.call("SET", bucket_tokens_key, current_tokens)
-    redis.call("SET", bucket_timestamp_key, now)
-    return {0, current_tokens}
-end
-"""
-
-rate_limit = r.register_script(lua_script)
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 
 def get_user_identifier_and_tier(request: Request):
@@ -48,7 +35,7 @@ def get_user_identifier_and_tier(request: Request):
             "refill_rate": 20 / 60,
         }  # 20 req/min
     else:
-        client_ip = request.client.host
+        client_ip = request.client.host if request.client else '127.0.0.1'
         return {
             "id": f"ip:{client_ip}",
             "capacity": 5,
@@ -57,7 +44,7 @@ def get_user_identifier_and_tier(request: Request):
 
 
 async def rate_limiter(
-    response: Response, user_data: dict = Depends(get_user_identifier_and_tier)
+   request: Request, response: Response, user_data: dict = Depends(get_user_identifier_and_tier)
 ):
     now = time.time()
 
@@ -72,9 +59,9 @@ async def rate_limiter(
 
     args = [capacity, refill_rate, now, requested]
 
-    result = await rate_limit(keys=keys, args=args)
-    is_allowed = result[0]
-    remaining = result[1]
+    result = await request.app.state.rate_limit(keys=keys, args=args)
+    is_allowed = int(result[0])
+    remaining = float(result[1])
 
     time_to_full = (capacity - remaining) / refill_rate
     reset_timestamp = int(now + time_to_full)
