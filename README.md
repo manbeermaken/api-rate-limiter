@@ -6,62 +6,6 @@ A high-performance API rate limiter built with **FastAPI**, **Redis**, and **Lua
 
 This project demonstrates a production-ready rate limiting solution that enforces different limits for authenticated users and guest clients. It uses Redis Lua scripts for atomic operations, ensuring accurate rate limit enforcement even under high concurrency.
 
-### Key Features
-
-- **Token Bucket Algorithm**: Smoothly distributes request allowance over time
-- **Redis Lua Scripting**: Atomic operations guarantee accurate counting without race conditions
-- **Dual-Tier Rate Limiting**:
-  - **Authenticated Users**: 20 requests per minute
-  - **Guest Users (IP-based)**: 5 requests per minute
-- **Detailed Response Headers**: Includes rate limit info and retry-after guidance
-- **Async Support**: Built with FastAPI for high performance
-
-## Architecture
-
-### Token Bucket Algorithm
-
-The token bucket algorithm works by:
-1. Starting with a bucket of `capacity` tokens
-2. Tokens refill at a constant `refill_rate` (tokens per second)
-3. Each request consumes 1 token
-4. Requests are allowed only if tokens are available
-5. Bucket never exceeds its capacity
-
-This approach provides several advantages:
-- Allows burst traffic within capacity limits
-- Distributes allowance smoothly over time
-- Prevents thundering herd scenarios
-
-### Redis Lua Script
-
-The core logic runs in a single atomic Lua transaction, preventing race conditions:
-- Checks current token count and timestamp
-- Calculates tokens to add based on time elapsed
-- Confirms token availability
-- Atomically updates state if allowed
-- Returns remaining tokens for response headers
-
-## Installation
-
-```bash
-# Clone the repository
-git clone <repo-url>
-cd api-rate-limiter
-
-# Install dependencies
-pip install -e .
-
-# Ensure Redis is running
-redis-server
-```
-
-### Requirements
-
-- Python >= 3.12
-- Redis >= 7.0
-- FastAPI >= 0.135
-- Redis Python client >= 7.4
-
 ## Usage
 
 Start the server:
@@ -159,27 +103,3 @@ Load testing was conducted using **Locust** across three phases to validate rate
 | Failure Rate (req/s) | 0.084 | 0.486 | 0.570 |
 
 **Analysis**: Rate limiting actively rejects excess requests with HTTP 429 responses. Guest users experience 41.7% rejection (2.5x over limit), while authenticated users see 24.7% rejection (~2x over limit). Response times remain fast even under rejection, indicating efficient rate limiter processing.
-
-## Project Structure
-
-```
-api-rate-limiter/
-├── app/
-│   └── app.py                 # FastAPI application with rate limiter
-├── tests/
-│   ├── locustfile.py          # Locust load testing configuration
-│   └── results/               # Test result reports and metrics
-│       ├── phase-1-*.csv      # Phase 1 results (Under Limit)
-│       ├── phase-2-*.csv      # Phase 2 results (At Limit)
-│       └── phase-3-*.csv      # Phase 3 results (Over Limit)
-├── pyproject.toml             # Project metadata and dependencies
-└── README.md                  # This file
-```
-
-## Key Findings
-
-1. **Atomic Operations**: Lua scripting prevents race conditions for accurate token counting
-2. **Tier Differentiation**: Different limits for guests vs. authenticated users work as intended
-3. **Graceful Rejection**: 429 responses are fast and include helpful retry information
-4. **Linear Scaling**: Higher request rates proportionally increase rejection rates
-5. **Consistent Performance**: Response times remain stable even under load
